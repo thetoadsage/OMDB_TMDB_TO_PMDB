@@ -409,9 +409,8 @@ def submit_rating(tmdb_id, score, label, media_type="movie"):
         print(f"Response: {response.text}")
         return False
 
-def main():
-    print("=== Movie/TV Data Collector & Submitter ===\n")
-    
+def process_item():
+    """Process a single movie or TV show"""
     # Step 1: Ask for media type
     media_type_choice = input("Search for (1) Movie or (2) TV Show? Enter 1 or 2: ").strip()
     
@@ -557,9 +556,9 @@ def main():
             print(f"TMDB ID {tmdb_id} → {id_type.upper()} {id_value}")
         print("=" * 70 + "\n")
         
-        confirm_mapping = input("Submit ID mapping(s) to PMDB? (yes/no): ").lower()
+        confirm_mapping = input("Submit ID mapping(s) to PMDB? (y/n or press Enter for yes): ").lower().strip()
         
-        if confirm_mapping == 'yes':
+        if confirm_mapping in ['y', 'yes', '']:
             print("\nSubmitting mappings...")
             print("-" * 70)
             for id_type, id_value in mappings_to_submit:
@@ -579,9 +578,9 @@ def main():
         print("No new ratings to submit - all ratings already exist in PMDB!")
         return
     
-    confirm_ratings = input("Submit new ratings to PMDB? (yes/no): ").lower()
+    confirm_ratings = input("Submit new ratings to PMDB? (y/n or press Enter for yes): ").lower().strip()
     
-    if confirm_ratings != 'yes':
+    if confirm_ratings not in ['y', 'yes', '']:
         print("Ratings submission cancelled.")
         return
     
@@ -597,6 +596,22 @@ def main():
     print(f"\n✓ Submitted {len(new_ratings)} new rating(s)!")
     if existing_ratings:
         print(f"  Skipped {len(existing_ratings)} existing rating(s).")
+
+def main():
+    print("=== Movie/TV Data Collector & Submitter ===\n")
+    
+    while True:
+        process_item()
+        
+        print("\n" + "=" * 70)
+        another = input("\nProcess another movie/TV show? (y/n or press Enter for yes): ").lower().strip()
+        
+        # Accept 'y', 'yes', or empty string (Enter) as yes
+        if another not in ['y', 'yes', '']:
+            print("\nExiting. Goodbye!")
+            break
+        
+        print("\n" + "=" * 70 + "\n")
 
 if __name__ == "__main__":
     main()
