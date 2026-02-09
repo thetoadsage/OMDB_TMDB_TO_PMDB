@@ -128,12 +128,29 @@ class MovieTVCollector:
             return None
 
     def parse_mdblist_ratings(self, data: Dict) -> Dict[str, float]:
-        """Parse MDblist response into structured ratings (0-100 scale), skipping zeros"""
+        """Parse MDblist response into structured ratings (0-100 scale), using robust logic"""
         ratings = {}
         if not data:
             return ratings
 
-        # MDblist returns a list of ratings objects
+        # --- PRIORITY 1: Top Level Fields (Most Reliable) ---
+        
+        # Metacritic (Metascore) - Top Level
+        # This avoids picking up the User Score from the ratings list
+        if 'Metascore' in data and data['Metascore'] != 'N/A':
+            try:
+                mc = float(data['Metascore'])
+                if mc > 0: ratings['MC'] = mc
+            except ValueError: pass
+            
+        # IMDb Rating - Top Level
+        if 'imdbRating' in data and data['imdbRating'] != 'N/A':
+            try:
+                im = float(data['imdbRating'])
+                if im > 0: ratings['IM'] = round(im * 10, 1) if im <= 10 else im
+            except ValueError: pass
+
+        # --- PRIORITY 2: Parse Ratings List (Backup/Extras) ---
         raw_ratings = data.get('ratings', [])
         
         for r in raw_ratings:
@@ -143,44 +160,52 @@ class MovieTVCollector:
             if val is None:
                 continue
 
+            # Robust value parsing (handle "53/100", "85%", etc.)
+            try:
+                clean_val = str(val).replace('%', '').strip()
+                if '/' in clean_val:
+                    score = float(clean_val.split('/')[0])
+                else:
+                    score = float(clean_val)
+            except ValueError:
+                continue 
+
+            # Logic
             try:
                 # IMDb (IM)
-                if source == 'internet movie database':
-                    score = float(val) * 10 if float(val) <= 10 else float(val)
-                    if score > 0: ratings['IM'] = round(score, 1)
+                if 'internet movie database' in source:
+                    # Skip if we already got it from top level
+                    if 'IM' not in ratings:
+                        final = score * 10 if score <= 10 else score
+                        if final > 0: ratings['IM'] = round(final, 1)
 
                 # Rotten Tomatoes Critics (RT)
                 elif source == 'rotten tomatoes':
-                    score = float(val)
-                    if score > 0: ratings['RT'] = score
+                    if 'audience' not in source:
+                        if score > 0: ratings['RT'] = score
 
                 # Rotten Tomatoes Audience / Popcornmeter (PC)
                 elif 'tomatoes' in source and 'audience' in source:
-                    score = float(val)
                     if score > 0: ratings['PC'] = score
 
                 # Metacritic (MC)
                 elif source == 'metacritic':
-                    score = float(val)
-                    if score > 0: ratings['MC'] = score
+                    if 'user' not in source and 'MC' not in ratings:
+                        # STRICT FILTER: Critic scores are rarely <= 10. User scores are usually <= 10.
+                        # This prevents picking up "5.3" (User) vs "53" (Critic)
+                        if score > 10: 
+                            ratings['MC'] = score
 
                 # Letterboxd (LB)
                 elif 'letterboxd' in source:
-                    score = float(val)
-                    if score <= 5: 
-                        score *= 20
-                    elif score <= 10:
-                        score *= 10
-                    
-                    if score > 0: ratings['LB'] = round(score, 1)
+                    # Convert /5 to /100
+                    final = score * 20 if score <= 5 else (score * 10 if score <= 10 else score)
+                    if final > 0: ratings['LB'] = round(final, 1)
 
                 # Trakt (TR)
                 elif 'trakt' in source:
-                    score = float(val)
-                    if score <= 10: 
-                        score *= 10
-                    
-                    if score > 0: ratings['TR'] = round(score, 1)
+                    final = score * 10 if score <= 10 else score
+                    if final > 0: ratings['TR'] = round(final, 1)
 
             except (ValueError, IndexError):
                 continue
