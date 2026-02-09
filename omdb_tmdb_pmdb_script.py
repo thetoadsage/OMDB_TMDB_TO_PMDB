@@ -24,6 +24,7 @@ class MovieTVCollector:
         self.omdb_key = self.api_keys.get('omdb_key')
         self.pmdb_key = self.api_keys.get('pmdb_key')
         self.tvdb_key = self.api_keys.get('tvdb_key')
+        self.trakt_client_id = self.api_keys.get('trakt_client_id')
         
         # API endpoints
         self.tmdb_search_url = "https://api.themoviedb.org/3/search/movie"
@@ -34,6 +35,7 @@ class MovieTVCollector:
         self.pmdb_ratings_url = "https://publicmetadb.com/api/external/ratings"
         self.pmdb_mappings_url = "https://publicmetadb.com/api/external/mappings"
         self.tvdb_base_url = "https://api4.thetvdb.com/v4"
+        self.trakt_base_url = "https://api.trakt.tv"
         
         # Cache
         self.tvdb_token = None
@@ -67,6 +69,8 @@ class MovieTVCollector:
             print("[WARNING] OMDb API key not found. Some ratings will be unavailable.")
         if not self.tvdb_key:
             print("[WARNING] TVDB API key not found. TV show features will be limited.")
+        if not self.trakt_client_id:
+            print("[WARNING] Trakt Client ID not found. Trakt ratings will be unavailable.")
     
     def _make_request(self, method: str, url: str, **kwargs) -> requests.Response:
         """Make HTTP request with retry logic and timeout"""
@@ -210,6 +214,30 @@ class MovieTVCollector:
         except Exception as e:
             print(f"[ERROR] Error getting OMDb data: {e}")
             return None
+            
+    def get_trakt_ratings(self, imdb_id: str, media_type: str = "movie") -> Optional[Dict]:
+        """Get ratings from Trakt using IMDb ID"""
+        if not self.trakt_client_id:
+            return None
+            
+        # Trakt uses 'shows' instead of 'tv' in URL
+        trakt_type = "shows" if media_type == "tv" else "movies"
+        url = f"{self.trakt_base_url}/{trakt_type}/{imdb_id}/ratings"
+        
+        headers = {
+            "Content-Type": "application/json",
+            "trakt-api-version": "2",
+            "trakt-api-key": self.trakt_client_id
+        }
+        
+        try:
+            response = self._make_request('GET', url, headers=headers)
+            return response.json()
+        except Exception as e:
+            # 404 is common if Trakt doesn't have the movie yet
+            if "404" not in str(e):
+                print(f"[ERROR] Error getting Trakt data: {e}")
+            return None
     
     @staticmethod
     def parse_omdb_ratings(omdb_data: Dict) -> Dict[str, float]:
@@ -248,6 +276,18 @@ class MovieTVCollector:
         vote_avg = tmdb_details.get('vote_average')
         if vote_avg and vote_avg > 0:
             return round(float(vote_avg) * 10, 1)
+        return None
+        
+    @staticmethod
+    def parse_trakt_rating(trakt_data: Optional[Dict]) -> Optional[float]:
+        """Parse Trakt rating (0-10 scale to 0-100 scale)"""
+        if not trakt_data:
+            return None
+            
+        rating = trakt_data.get('rating')
+        if rating and rating > 0:
+            # Trakt is 1-10, convert to 1-100
+            return round(float(rating) * 10, 1)
         return None
     
     def get_existing_mappings(self, tmdb_id: int, media_type: str = "movie") -> Dict[str, List[str]]:
@@ -504,6 +544,15 @@ class MovieTVCollector:
         tmdb_rating = self.parse_tmdb_rating(tmdb_data.get('details'))
         if tmdb_rating:
             ratings['TM'] = tmdb_rating
+            
+        # Step 5b: Get ratings from Trakt (NEW)
+        if self.trakt_client_id:
+            print(f"Fetching ratings from Trakt...")
+            trakt_data = self.get_trakt_ratings(imdb_id, media_type)
+            trakt_rating = self.parse_trakt_rating(trakt_data)
+            if trakt_rating:
+                ratings['TR'] = trakt_rating
+                print(f"[OK] Found Trakt rating: {trakt_rating}/100")
         
         # Step 6: Get TVDB ID (TV shows only)
         tvdb_id = None
