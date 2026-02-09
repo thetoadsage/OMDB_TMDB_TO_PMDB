@@ -3,5 +3,5 @@
   "tmdb_key": "YOUR_API_KEY_HERE",
   "pmdb_key": "pm-YOUR_API_KEY_HERE",
   "tvdb_key": "YOUR_API_KEY_HERE",
-  "trakt_client_id:" "YOUR_API_KEY_HERE"
+  "trakt_client_id": "YOUR_API_KEY_HERE"
 }
