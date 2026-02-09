@@ -1,9 +1,8 @@
 import requests
 import json
 import os
-from typing import Dict, List, Optional, Set, Tuple
-from datetime import datetime
 import time
+from typing import Dict, List, Optional, Set, Tuple
 
 # Constants
 REQUEST_TIMEOUT = 10  # seconds
@@ -21,26 +20,17 @@ class MovieTVCollector:
         """Initialize with API keys from file"""
         self.api_keys = self._load_api_keys(api_keys_file)
         self.tmdb_key = self.api_keys.get('tmdb_key')
-        self.omdb_key = self.api_keys.get('omdb_key')
         self.pmdb_key = self.api_keys.get('pmdb_key')
-        self.tvdb_key = self.api_keys.get('tvdb_key')
-        self.trakt_client_id = self.api_keys.get('trakt_client_id')
+        self.mdblist_key = self.api_keys.get('mdblist_key')
         
         # API endpoints
         self.tmdb_search_url = "https://api.themoviedb.org/3/search/movie"
         self.tmdb_tv_search_url = "https://api.themoviedb.org/3/search/tv"
         self.tmdb_movie_url = "https://api.themoviedb.org/3/movie"
         self.tmdb_tv_url = "https://api.themoviedb.org/3/tv"
-        self.omdb_url = "http://www.omdbapi.com/"
+        self.mdblist_url = "https://mdblist.com/api/"
         self.pmdb_ratings_url = "https://publicmetadb.com/api/external/ratings"
         self.pmdb_mappings_url = "https://publicmetadb.com/api/external/mappings"
-        self.tvdb_base_url = "https://api4.thetvdb.com/v4"
-        self.trakt_base_url = "https://api.trakt.tv"
-        
-        # Cache
-        self.tvdb_token = None
-        self.token_timestamp = None
-        self.TOKEN_EXPIRY = 3600  # 1 hour
         
         # Validate essential keys
         self._validate_keys()
@@ -49,8 +39,7 @@ class MovieTVCollector:
         """Load API keys from JSON file with error handling"""
         try:
             with open(filename, 'r', encoding='utf-8') as f:
-                keys = json.load(f)
-                return keys
+                return json.load(f)
         except FileNotFoundError:
             print(f"[ERROR] {filename} file not found!")
             print(f"Please create a {filename} file with your API keys.")
@@ -65,12 +54,8 @@ class MovieTVCollector:
             raise ValueError("TMDB API key is required")
         if not self.pmdb_key:
             raise ValueError("PMDB API key is required")
-        if not self.omdb_key:
-            print("[WARNING] OMDb API key not found. Some ratings will be unavailable.")
-        if not self.tvdb_key:
-            print("[WARNING] TVDB API key not found. TV show features will be limited.")
-        if not self.trakt_client_id:
-            print("[WARNING] Trakt Client ID not found. Trakt ratings will be unavailable.")
+        if not self.mdblist_key:
+            raise ValueError("MDblist API key is required for ratings")
     
     def _make_request(self, method: str, url: str, **kwargs) -> requests.Response:
         """Make HTTP request with retry logic and timeout"""
@@ -90,77 +75,6 @@ class MovieTVCollector:
                     raise APIError(f"Request failed: {e}")
                 time.sleep(RETRY_DELAY)
     
-    def get_tvdb_token(self) -> Optional[str]:
-        """Authenticate with TVDB and get bearer token with caching"""
-        if not self.tvdb_key:
-            return None
-        
-        # Check if token is still valid
-        if self.tvdb_token and self.token_timestamp:
-            if (time.time() - self.token_timestamp) < self.TOKEN_EXPIRY:
-                return self.tvdb_token
-        
-        headers = {"Content-Type": "application/json"}
-        payload = {"apikey": self.tvdb_key}
-        
-        try:
-            response = self._make_request(
-                'POST',
-                f"{self.tvdb_base_url}/login",
-                headers=headers,
-                json=payload
-            )
-            
-            data = response.json()
-            self.tvdb_token = data.get('data', {}).get('token')
-            self.token_timestamp = time.time()
-            
-            if self.tvdb_token:
-                print("[OK] TVDB authentication successful")
-                return self.tvdb_token
-            else:
-                print("[WARNING] TVDB token not found in response")
-                return None
-        except Exception as e:
-            print(f"[WARNING] Error authenticating with TVDB: {e}")
-            return None
-    
-    def search_tvdb_by_imdb(self, imdb_id: str) -> Optional[Dict]:
-        """Search TVDB using IMDb ID"""
-        token = self.get_tvdb_token()
-        if not token:
-            return None
-        
-        headers = {
-            "Authorization": f"Bearer {token}",
-            "Content-Type": "application/json"
-        }
-        params = {"query": imdb_id, "type": "series"}
-        
-        try:
-            response = self._make_request(
-                'GET',
-                f"{self.tvdb_base_url}/search",
-                headers=headers,
-                params=params
-            )
-            
-            data = response.json()
-            results = data.get('data', [])
-            
-            # Look for exact IMDb match
-            for result in results:
-                remote_ids = result.get('remote_ids', [])
-                for remote_id in remote_ids:
-                    if (remote_id.get('sourceName') == 'IMDB' and 
-                        remote_id.get('id') == imdb_id):
-                        return result
-            
-            return results[0] if results else None
-        except Exception as e:
-            print(f"  [ERROR] Error searching TVDB: {e}")
-            return None
-    
     def search_tmdb(self, title: str, media_type: str = "movie") -> List[Dict]:
         """Search for a movie or TV show on TMDB"""
         url = self.tmdb_tv_search_url if media_type == "tv" else self.tmdb_search_url
@@ -175,7 +89,7 @@ class MovieTVCollector:
             return []
     
     def get_tmdb_details(self, tmdb_id: int, media_type: str = "movie") -> Dict:
-        """Get detailed info including IMDb ID and rating from TMDB"""
+        """Get detailed info including IMDb ID from TMDB"""
         base_url = self.tmdb_tv_url if media_type == "tv" else self.tmdb_movie_url
         
         # Get external IDs and details
@@ -198,73 +112,88 @@ class MovieTVCollector:
             print(f"[ERROR] Error getting TMDB details: {e}")
         
         return result
-    
-    def get_omdb_ratings(self, imdb_id: str, media_type: str = "movie") -> Optional[Dict]:
-        """Get ratings from OMDb"""
-        if not self.omdb_key:
-            return None
-        
-        params = {"apikey": self.omdb_key, "i": imdb_id}
-        if media_type == "tv":
-            params["type"] = "series"
-        
-        try:
-            response = self._make_request('GET', self.omdb_url, params=params)
-            return response.json()
-        except Exception as e:
-            print(f"[ERROR] Error getting OMDb data: {e}")
+
+    def get_mdblist_data(self, imdb_id: str) -> Optional[Dict]:
+        """Fetch all ratings from MDblist"""
+        if not self.mdblist_key:
             return None
             
-    def get_trakt_ratings(self, imdb_id: str, media_type: str = "movie") -> Optional[Dict]:
-        """Get ratings from Trakt using IMDb ID"""
-        if not self.trakt_client_id:
-            return None
-            
-        # Trakt uses 'shows' instead of 'tv' in URL
-        trakt_type = "shows" if media_type == "tv" else "movies"
-        url = f"{self.trakt_base_url}/{trakt_type}/{imdb_id}/ratings"
-        
-        headers = {
-            "Content-Type": "application/json",
-            "trakt-api-version": "2",
-            "trakt-api-key": self.trakt_client_id
-        }
+        params = {"apikey": self.mdblist_key, "i": imdb_id}
         
         try:
-            response = self._make_request('GET', url, headers=headers)
+            response = self._make_request('GET', self.mdblist_url, params=params)
             return response.json()
         except Exception as e:
-            # 404 is common if Trakt doesn't have the movie yet
-            if "404" not in str(e):
-                print(f"[ERROR] Error getting Trakt data: {e}")
+            print(f"[ERROR] Error getting MDblist data: {e}")
             return None
-    
-    @staticmethod
-    def parse_omdb_ratings(omdb_data: Dict) -> Dict[str, float]:
-        """Parse OMDb ratings into structured format"""
+
+    def parse_mdblist_ratings(self, data: Dict) -> Dict[str, float]:
+        """Parse MDblist response into structured ratings (0-100 scale), skipping zeros"""
         ratings = {}
+        if not data:
+            return ratings
+
+        # MDblist returns a list of ratings objects
+        raw_ratings = data.get('ratings', [])
         
-        # IMDb rating (convert to 100 scale)
-        if omdb_data.get('imdbRating') and omdb_data['imdbRating'] != 'N/A':
-            try:
-                imdb_score = float(omdb_data['imdbRating']) * 10
-                ratings['IM'] = round(imdb_score, 1)
-            except ValueError:
-                pass
-        
-        # Parse Ratings array
-        for rating in omdb_data.get('Ratings', []):
-            source = rating.get('Source')
-            value = rating.get('Value')
+        for r in raw_ratings:
+            source = r.get('source', '').lower()
+            val = r.get('value')
             
+            if val is None:
+                continue
+
             try:
-                if source == 'Rotten Tomatoes' and value != 'N/A':
-                    ratings['RT'] = float(value.replace('%', ''))
-                elif source == 'Metacritic' and value != 'N/A':
-                    ratings['MC'] = float(value.split('/')[0])
+                # IMDb (IM)
+                if source == 'internet movie database':
+                    score = float(val) * 10 if float(val) <= 10 else float(val)
+                    if score > 0: ratings['IM'] = round(score, 1)
+
+                # Rotten Tomatoes Critics (RT)
+                elif source == 'rotten tomatoes':
+                    score = float(val)
+                    if score > 0: ratings['RT'] = score
+
+                # Rotten Tomatoes Audience / Popcornmeter (PC)
+                elif 'tomatoes' in source and 'audience' in source:
+                    score = float(val)
+                    if score > 0: ratings['PC'] = score
+
+                # Metacritic (MC)
+                elif source == 'metacritic':
+                    score = float(val)
+                    if score > 0: ratings['MC'] = score
+
+                # Letterboxd (LB)
+                elif 'letterboxd' in source:
+                    score = float(val)
+                    if score <= 5: 
+                        score *= 20
+                    elif score <= 10:
+                        score *= 10
+                    
+                    if score > 0: ratings['LB'] = round(score, 1)
+
+                # Trakt (TR)
+                elif 'trakt' in source:
+                    score = float(val)
+                    if score <= 10: 
+                        score *= 10
+                    
+                    if score > 0: ratings['TR'] = round(score, 1)
+
             except (ValueError, IndexError):
                 continue
-        
+                
+        # Fallback: Check top level score for Trakt if not in list
+        if 'score' in data and data['score'] and 'TR' not in ratings:
+            try:
+                tr_score = float(data['score'])
+                if tr_score > 0:
+                    ratings['TR'] = round(tr_score, 1)
+            except ValueError:
+                pass
+
         return ratings
     
     @staticmethod
@@ -276,18 +205,6 @@ class MovieTVCollector:
         vote_avg = tmdb_details.get('vote_average')
         if vote_avg and vote_avg > 0:
             return round(float(vote_avg) * 10, 1)
-        return None
-        
-    @staticmethod
-    def parse_trakt_rating(trakt_data: Optional[Dict]) -> Optional[float]:
-        """Parse Trakt rating (0-10 scale to 0-100 scale)"""
-        if not trakt_data:
-            return None
-            
-        rating = trakt_data.get('rating')
-        if rating and rating > 0:
-            # Trakt is 1-10, convert to 1-100
-            return round(float(rating) * 10, 1)
         return None
     
     def get_existing_mappings(self, tmdb_id: int, media_type: str = "movie") -> Dict[str, List[str]]:
@@ -530,42 +447,31 @@ class MovieTVCollector:
             print(f"[ERROR] Could not find IMDb ID for this {media_label}.")
             return
         
-        # Step 5: Get ratings from OMDb
-        print(f"Fetching ratings from OMDb...")
-        omdb_data = self.get_omdb_ratings(imdb_id, media_type)
+        # Step 5: Get ALL ratings from MDblist (plus IDs)
+        print(f"Fetching ratings and IDs from MDblist...")
+        mdblist_data = self.get_mdblist_data(imdb_id)
         
         ratings = {}
-        if omdb_data and omdb_data.get('Response') != 'False':
-            ratings = self.parse_omdb_ratings(omdb_data)
-        else:
-            print("[WARNING] Could not fetch OMDb data. Continuing with available ratings.")
+        tvdb_id = None
         
-        # Add TMDB rating
+        if mdblist_data:
+            ratings = self.parse_mdblist_ratings(mdblist_data)
+            
+            # Extract TVDB ID from MDblist
+            if media_type == "tv":
+                # MDblist usually provides this as 'tvdbid'
+                tvdb_id = mdblist_data.get('tvdbid')
+                if tvdb_id:
+                    print(f"[OK] Found TVDB ID via MDblist: {tvdb_id}")
+        else:
+            print("[WARNING] Could not fetch MDblist data.")
+        
+        # Add TMDB rating (from TMDB direct source)
         tmdb_rating = self.parse_tmdb_rating(tmdb_data.get('details'))
         if tmdb_rating:
             ratings['TM'] = tmdb_rating
-            
-        # Step 5b: Get ratings from Trakt (NEW)
-        if self.trakt_client_id:
-            print(f"Fetching ratings from Trakt...")
-            trakt_data = self.get_trakt_ratings(imdb_id, media_type)
-            trakt_rating = self.parse_trakt_rating(trakt_data)
-            if trakt_rating:
-                ratings['TR'] = trakt_rating
-                print(f"[OK] Found Trakt rating: {trakt_rating}/100")
         
-        # Step 6: Get TVDB ID (TV shows only)
-        tvdb_id = None
-        if media_type == "tv":
-            print(f"Fetching TVDB ID...")
-            tvdb_data = self.search_tvdb_by_imdb(imdb_id)
-            
-            if tvdb_data:
-                tvdb_id = tvdb_data.get('tvdb_id')
-                if tvdb_id:
-                    print(f"[OK] Found TVDB ID: {tvdb_id}")
-        
-        # Step 7: Check existing mappings
+        # Step 6: Check existing mappings
         print(f"Checking existing ID mappings in PMDB...")
         existing_mappings = self.get_existing_mappings(tmdb_id, media_type)
         
@@ -573,7 +479,7 @@ class MovieTVCollector:
         tvdb_exists = (tvdb_id and 'tvdb' in existing_mappings and 
                        str(tvdb_id) in existing_mappings['tvdb'])
         
-        # Step 8: Check existing ratings
+        # Step 7: Check existing ratings
         print(f"Checking existing ratings in PMDB...")
         existing_labels = self.get_existing_ratings(tmdb_id, media_type)
         
@@ -587,16 +493,18 @@ class MovieTVCollector:
             if label.upper() in existing_labels
         }
         
-        # Step 9: Display info
+        # Step 8: Display info
         self.display_item_info(
             selected_item, imdb_id, tvdb_id,
             new_ratings, existing_ratings, media_type
         )
         
-        # Step 10: Handle mappings
+        # Step 9: Handle mappings
         mappings_to_submit = []
         if not imdb_exists:
             mappings_to_submit.append(('imdb', imdb_id))
+        
+        # Add TVDB mapping if found and not existing
         if tvdb_id and not tvdb_exists:
             mappings_to_submit.append(('tvdb', str(tvdb_id)))
         
@@ -621,7 +529,7 @@ class MovieTVCollector:
         else:
             print("[INFO] All ID mappings already exist in PMDB\n")
         
-        # Step 11: Handle ratings
+        # Step 10: Handle ratings
         if not new_ratings:
             print("[INFO] No new ratings to submit - all ratings already exist!")
             return
@@ -632,7 +540,7 @@ class MovieTVCollector:
             print("Ratings submission cancelled.")
             return
         
-        # Step 12: Submit ratings
+        # Step 11: Submit ratings
         print("\nSubmitting ratings...")
         print("-" * 70)
         
@@ -649,7 +557,7 @@ class MovieTVCollector:
     def run(self):
         """Main program loop"""
         print("=" * 70)
-        print("Movie/TV Data Collector & Submitter")
+        print("Movie/TV Data Collector (Powered by MDblist)")
         print("=" * 70 + "\n")
         
         while True:
